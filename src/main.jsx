@@ -1,8 +1,16 @@
 
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
+import { createClient } from "@supabase/supabase-js";
 import "./style.css";
 
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+const supabase =
+  supabaseUrl && supabaseKey
+    ? createClient(supabaseUrl, supabaseKey)
+    : null;
 const perguntas = [
   {
     nome: "Cristo Redentor",
@@ -237,6 +245,11 @@ function App() {
   const [acertos, setAcertos] = useState(0);
   const [ranking, setRanking] = useState([]);
 
+  const [salvando, setSalvando] = useState(false);
+  const [erroSalvar, setErroSalvar] = useState("");
+  const [carregandoRanking, setCarregandoRanking] = useState(false);
+  const [erroRanking, setErroRanking] = useState("");
+
   const pergunta = perguntas[rodada];
 
   function iniciar() {
@@ -261,14 +274,50 @@ function App() {
     setResultado({ acertou, ganhou });
   }
 
-  function proxima() {
-    if (rodada === perguntas.length - 1) {
-      const final = {
-        nome: nome.trim(),
-        pontos,
-        acertos,
-        data: new Date().toLocaleString("pt-BR")
-      };
+  async function proxima() {
+  if (rodada === perguntas.length - 1) {
+    if (salvando) return;
+
+    setErroSalvar("");
+
+    if (!supabase) {
+      setErroSalvar("Conexão com Supabase não configurada.");
+      return;
+    }
+
+    setSalvando(true);
+
+    try {
+      const { error } = await supabase
+        .from("pontuacoes")
+        .insert([
+          {
+            nome: nome.trim().slice(0, 20),
+            pontos,
+            acertos
+          }
+        ]);
+
+      if (error) throw error;
+
+      setTela("final");
+    } catch (error) {
+      console.error(error);
+      setErroSalvar(
+        "Não foi possível salvar sua pontuação. Tente novamente."
+      );
+    } finally {
+      setSalvando(false);
+    }
+
+    return;
+  }
+
+  setRodada(r => r + 1);
+  setPista(0);
+  setResposta(null);
+  setResultado(null);
+}
 
       const lista = JSON.parse(
         localStorage.getItem("detetives-ranking") || "[]"
@@ -287,15 +336,38 @@ function App() {
     setResultado(null);
   }
 
-  function mostrarRanking() {
-    const lista = JSON.parse(
-      localStorage.getItem("detetives-ranking") || "[]"
-    );
+ async function mostrarRanking() {
+  setTela("ranking");
+  setCarregandoRanking(true);
+  setErroRanking("");
 
-    lista.sort((a, b) => b.pontos - a.pontos || b.acertos - a.acertos);
-    setRanking(lista);
-    setTela("ranking");
+  if (!supabase) {
+    setErroRanking("Conexão com Supabase não configurada.");
+    setRanking([]);
+    setCarregandoRanking(false);
+    return;
   }
+
+  try {
+    const { data, error } = await supabase
+      .from("pontuacoes")
+      .select("id, nome, pontos, acertos, criado_em")
+      .order("pontos", { ascending: false })
+      .order("acertos", { ascending: false })
+      .order("criado_em", { ascending: true })
+      .limit(100);
+
+    if (error) throw error;
+
+    setRanking(data || []);
+  } catch (error) {
+    console.error(error);
+    setErroRanking("Não foi possível carregar o ranking.");
+    setRanking([]);
+  } finally {
+    setCarregandoRanking(false);
+  }
+}
 
   return (
     <div className="app">
@@ -403,9 +475,21 @@ function App() {
                       REVELAR OUTRA PISTA
                     </button>
                   )}
-                  <button className="botao principal" disabled={resposta === null} onClick={confirmar}>
-                    CONFIRMAR RESPOSTA
-                  </button>
+               
+{erroSalvar && <p role="alert">{erroSalvar}</p>}
+
+<button
+  className="botao principal"
+  disabled={salvando}
+  onClick={proxima}
+>
+  {salvando
+    ? "SALVANDO PONTUAÇÃO..."
+    : rodada === 19
+      ? "VER RESULTADO FINAL →"
+      : "PRÓXIMO DESAFIO →"}
+</button>
+
                 </div>
               </>
             )}
@@ -448,19 +532,21 @@ function App() {
         <main className="caixa ranking">
           <span className="selo">CLASSIFICAÇÃO GERAL</span>
           <h2>🏆 Ranking dos detetives</h2>
-          {ranking.length === 0 ? (
-            <p>Ainda não há participantes. Seja o primeiro a jogar!</p>
-          ) : (
-            ranking
-              .sort((a, b) => b.pontos - a.pontos || b.acertos - a.acertos)
-              .map((aluno, i) => (
-                <div className="linha-ranking" key={i}>
-                  <b>{i + 1}º</b>
-                  <span>{aluno.nome}</span>
-                  <strong>{aluno.pontos} pontos</strong>
-                </div>
-              ))
-          )}
+         {carregandoRanking ? (
+  <p>Carregando ranking...</p>
+) : erroRanking ? (
+  <p role="alert">{erroRanking}</p>
+) : ranking.length === 0 ? (
+  <p>Ainda não há participantes. Seja o primeiro a jogar!</p>
+) : (
+  ranking.map((aluno, i) => (
+    <div className="linha-ranking" key={aluno.id}>
+      <b>{i + 1}º</b>
+      <span>{aluno.nome}</span>
+      <strong>{aluno.pontos} pontos</strong>
+    </div>
+  ))
+)}
           <button className="botao principal" onClick={() => setTela("inicio")}>
             VOLTAR AO INÍCIO
           </button>
